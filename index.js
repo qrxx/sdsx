@@ -1,93 +1,94 @@
 const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
-const { Transform } = require('stream');
-const zlib = require('zlib');
+const axios = require('axios');
+const cors = require('cors');
+const url = require('url');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Middleware to add CORS headers
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('优化', 'Content-Type');
-  next();
-});
-
-// Proxy middleware for all paths under /superstacja
-app.use('/superstacja', createProxyMiddleware({
-  target: 'http://145.239.19.149:9300/PL_SUPERSTACJA',
-  changeOrigin: true,
-  pathRewrite: {
-    '^/superstacja': '', // Remove /superstacja prefix
-  },
-  onProxyRes: (proxyRes, req, res) => {
-    // Log headers for debugging
-    console.log('Proxy response headers:', proxyRes.headers);
-
-    // Set headers
-    if (req.url.endsWith('.m3u8')) {
-      proxyRes.headers['content-type'] = 'application/vnd.apple.mpegurl';
-      delete proxyRes.headers['content-encoding']; // Remove encoding to handle decompression
-    }
-    delete proxyRes.headers['x-powered-by'];
-    delete proxyRes.headers['server'];
-
-    // Check if response is gzip-compressed
-    const isGzip = proxyRes.headers['content-encoding'] === 'gzip';
-
-    // Transform .m3u8 content to rewrite URLs
-    if (req.url.endsWith('.m3u8')) {
-      const transform = new Transform({
-        transform(chunk, encoding, callback) {
-          let data = chunk;
-          // Decompress if gzip
-          if (isGzip) {
-            try {
-              data = zlib.gunzipSync(chunk);
-              console.log('Decompressed m3u8 content:', data.toString().substring(0, 100)); // Log first 100 chars
-            } catch (err) {
-              console.error('Decompression error:', err);
-              callback(err);
-              return;
-            }
-          }
-          // Rewrite relative URLs
-          let content = data.toString();
-          content = content.replace(
-            /(^|\n)([^#].*?\.m3u8)/g,
-            `$1https://${req.headers.host}/superstacja/$2`
-          );
-          callback(null, content);
-        },
-      });
-
-      // Pipe through decompression if needed
-      if (isGzip) {
-        proxyRes.pipe(zlib.createGunzip()).pipe(transform).pipe(res);
-      } else {
-        proxyRes.pipe(transform).pipe(res);
-      }
-    } else {
-      // For non-m3u8 files (e.g., .ts segments), decompress if needed
-      if (isGzip) {
-        proxyRes.pipe(zlib.createGunzip()).pipe(res);
-      } else {
-        proxyRes.pipe(res);
-      }
-    }
-  },
-  onError: (err, req, res) => {
-    console.error('Proxy error:', err);
-    res.status(500).send('Proxy error');
-  },
+// Enable CORS to allow Clappr player to access the proxied stream
+app.use(cors({
+  origin: '*', // Adjust to your site's domain in production for security
+  methods: ['GET', 'HEAD'],
+  allowedHeaders: ['Content-Type', 'Range'],
+  exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range']
 }));
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).send('OK');
+// Original M3U8 URL (store in environment variable in production)
+const ORIGINAL_M3U8_URL = 'http://145.239.19.149:9300/PL_SUPERSTACJA/index.m3u8';
+
+// Helper function to rewrite URLs in M3U8 content
+const rewriteM3u8Urls = (m3u8Content, originalBaseUrl, proxyBaseUrl) => {
+  const lines = m3u8Content.split('\n');
+  const rewrittenLines = lines.map(line => {
+    // Skip comments and empty lines
+    if (line.startsWith('#') || line.trim() === '') {
+      return line;
+    }
+    // Check if the line is a relative or absolute URL
+    try {
+      const parsedUrl = new URL(line, originalBaseUrl);
+      // Rewrite to proxy URL
+      const relativePath = parsedUrl.pathname.split('/').pop();
+      return `${proxyBaseUrl}/${relativePath}`;
+    } catch (e) {
+      // If not a valid URL, return unchanged
+      return line;
+    }
+  });
+  return rewrittenLines.join('\n');
+};
+
+// Proxy endpoint for M3U8 playlist
+app.get('/superstacija/index.m3u8', async (req, res) => {
+  try {
+    const response = await axios.get(ORIGINAL_M3U8_URL, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      responseType: 'text'
+    });
+
+    const originalBaseUrl = url.parse(ORIGINAL_M3U8_URL).href.replace(/\/[^\/]+$/, '');
+    const proxyBaseUrl = `${req.protocol}://${req.get('host')}/superstacija/segments`;
+
+    const rewrittenM3u8 = rewriteM3u8Urls(response.data, originalBaseUrl, proxyBaseUrl);
+
+    res.set({
+      'Content-Type': 'application/vnd.apple.mpegurl',
+      'Cache-Control': 'no-cache'
+    });
+    res.send(rewrittenM3u8);
+  } catch (error) {
+    console.error('Error fetching M3U8:', error.message);
+    res.status(500).send('Error proxying M3U8 playlist');
+  }
 });
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+// Proxy endpoint for .ts segments
+app.get('/superstacija/segments/:segment', async (req, res) => {
+  const segment = req.params.segment;
+  const segmentUrl = `http://145.239.19.149:9300/PL_SUPERSTACJA/${segment}`;
+
+  try {
+    const response = await axios.get(segmentUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      responseType: 'stream'
+    });
+
+    res.set({
+      'Content-Type': 'video/mp2t',
+      'Cache-Control': 'no-cache'
+    });
+    response.data.pipe(res);
+  } catch (error) {
+    console.error('Error fetching segment:', error.message);
+    res.status(500).send('Error proxying segment');
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Proxy server running on port ${PORT}`);
 });
