@@ -1,21 +1,52 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const { Transform } = require('stream');
 
 const app = express();
 
-// Configure proxy middleware to forward requests
-app.use('/superstacja/index.m3u8', createProxyMiddleware({
-  target: 'http://145.239.19.149:9300/PL_SUPERSTACJA/index.m3u8',
+// Middleware to add CORS headers to all responses
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
+
+// Proxy middleware for all paths under /superstacja
+app.use('/superstacja', createProxyMiddleware({
+  target: 'http://145.239.19.149:9300/PL_SUPERSTACJA',
   changeOrigin: true,
   pathRewrite: {
-    '^/superstacja/index.m3u8': '', // Remove the path prefix
+    '^/superstacja': '', // Remove /superstacja prefix
   },
-  onProxyRes: (proxyRes) => {
-    // Set appropriate content type for m3u8 playlist
-    proxyRes.headers['content-type'] = 'application/vnd.apple.mpegurl';
+  onProxyRes: (proxyRes, req, res) => {
+    // Set appropriate content type for m3u8 files
+    if (req.url.endsWith('.m3u8')) {
+      proxyRes.headers['content-type'] = 'application/vnd.apple.mpegurl';
+    }
     // Remove headers that might expose the original server
     delete proxyRes.headers['x-powered-by'];
     delete proxyRes.headers['server'];
+
+    // Transform m3u8 content to rewrite relative URLs
+    if (req.url.endsWith('.m3u8')) {
+      const transform = new Transform({
+        transform(chunk, encoding, callback) {
+          let data = chunk.toString();
+          // Rewrite relative URLs to point to the proxy
+          data = data.replace(
+            /(^|\n)([^#].*?\.m3u8)/g,
+            `$1https://${req.headers.host}/superstacja/$2`
+          );
+          callback(null, data);
+        },
+      });
+      proxyRes.pipe(transform).pipe(res);
+    }
+  },
+  onError: (err, req, res) => {
+    console.error('Proxy error:', err);
+    res.status(500).send('Proxy error');
   },
 }));
 
