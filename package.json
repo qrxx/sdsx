@@ -1,14 +1,16 @@
 {
   "name": "m3u8-proxy",
   "version": "1.0.0",
-  "description": "Proxy for M3U8 streams",
+  "description": "Proxy for M3U8 streaming with URL masking",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
     "axios": "^1.7.2",
-    "cors": "^2.8.5"
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=14"
   }
 }
