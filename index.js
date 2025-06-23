@@ -1,26 +1,30 @@
 const express = require('express');
-     const ffmpeg = require('fluent-ffmpeg');
-     const app = express();
-     const port = process.env.PORT || 3000;
+const { createProxyMiddleware } = require('http-proxy-middleware');
 
-     app.use(express.static('public'));
+const app = express();
 
-     ffmpeg('rtsp://146.59.54.163/267')
-       .inputOptions('-rtsp_transport', 'tcp')
-       .outputOptions([
-         '-c:v copy',
-         '-c:a aac',
-         '-f hls',
-         '-hls_time 10',
-         '-hls_list_size 6',
-         '-hls_segment_filename public/index%d.ts'
-       ])
-       .output('public/index.m3u8')
-       .on('start', () => console.log('FFmpeg started'))
-       .on('error', (err) => console.error('FFmpeg error:', err))
-       .on('end', () => console.log('FFmpeg finished'))
-       .run();
+// Configure proxy middleware to forward requests
+app.use('/superstacja/index.m3u8', createProxyMiddleware({
+  target: 'http://145.239.19.149:9300/PL_SUPERSTACJA/index.m3u8',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/superstacja/index.m3u8': '', // Remove the path prefix
+  },
+  onProxyRes: (proxyRes) => {
+    // Set appropriate content type for m3u8 playlist
+    proxyRes.headers['content-type'] = 'application/vnd.apple.mpegurl';
+    // Remove headers that might expose the original server
+    delete proxyRes.headers['x-powered-by'];
+    delete proxyRes.headers['server'];
+  },
+}));
 
-     app.listen(port, () => {
-       console.log(`Server running on port ${port}`);
-     });
+// Basic health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
