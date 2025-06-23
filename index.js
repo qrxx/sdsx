@@ -1,94 +1,80 @@
 const express = require('express');
 const axios = require('axios');
-const cors = require('cors');
 const url = require('url');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enable CORS to allow Clappr player to access the proxied stream
-app.use(cors({
-  origin: '*', // Adjust to your site's domain in production for security
-  methods: ['GET', 'HEAD'],
-  allowedHeaders: ['Content-Type', 'Range'],
-  exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range']
-}));
-
-// Original M3U8 URL (store in environment variable in production)
+// Original M3U8 URL
 const ORIGINAL_M3U8_URL = 'http://145.239.19.149:9300/PL_SUPERSTACJA/index.m3u8';
 
-// Helper function to rewrite URLs in M3U8 content
-const rewriteM3u8Urls = (m3u8Content, originalBaseUrl, proxyBaseUrl) => {
-  const lines = m3u8Content.split('\n');
-  const rewrittenLines = lines.map(line => {
-    // Skip comments and empty lines
-    if (line.startsWith('#') || line.trim() === '') {
-      return line;
-    }
-    // Check if the line is a relative or absolute URL
-    try {
-      const parsedUrl = new URL(line, originalBaseUrl);
-      // Rewrite to proxy URL
-      const relativePath = parsedUrl.pathname.split('/').pop();
-      return `${proxyBaseUrl}/${relativePath}`;
-    } catch (e) {
-      // If not a valid URL, return unchanged
-      return line;
-    }
-  });
-  return rewrittenLines.join('\n');
-};
+// Set CORS headers to allow Clappr player access
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
 
-// Proxy endpoint for M3U8 playlist
-app.get('/superstacija/index.m3u8', async (req, res) => {
+// Handle requests for the M3U8 playlist
+app.get('/index.m3u8', async (req, res) => {
   try {
+    // Fetch the original M3U8 playlist
     const response = await axios.get(ORIGINAL_M3U8_URL, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      responseType: 'text'
+      responseType: 'text',
     });
 
-    const originalBaseUrl = url.parse(ORIGINAL_M3U8_URL).href.replace(/\/[^\/]+$/, '');
-    const proxyBaseUrl = `${req.protocol}://${req.get('host')}/superstacija/segments`;
+    // Get the base URL for resolving relative segment URLs
+    const baseUrl = ORIGINAL_M3U8_URL.substring(0, ORIGINAL_M3U8_URL.lastIndexOf('/') + 1);
+    const host = req.get('host');
+    const protocol = req.protocol || 'https'; // Render.com uses HTTPS
 
-    const rewrittenM3u8 = rewriteM3u8Urls(response.data, originalBaseUrl, proxyBaseUrl);
+    // Modify the M3U8 content to rewrite segment URLs
+    let m3u8Content = response.data;
 
-    res.set({
-      'Content-Type': 'application/vnd.apple.mpegurl',
-      'Cache-Control': 'no-cache'
-    });
-    res.send(rewrittenM3u8);
+    // Replace relative segment URLs (e.g., segment1.ts) with proxied URLs
+    m3u8Content = m3u8Content.replace(
+      /((?:[a-zA-Z0-9_-]+\.)?(?:ts|m3u8))/g,
+      (match) => `${protocol}://${host}/segments/${match}`
+    );
+
+    // Replace absolute segment URLs if present
+    m3u8Content = m3u8Content.replace(
+      /http:\/\/145\.239\.19\.149:9300\/PL_SUPERSTACJA\/((?:[a-zA-Z0-9_-]+\.)?(?:ts|m3u8))/g,
+      `${protocol}://${host}/segments/$1`
+    );
+
+    // Set appropriate content type for M3U8
+    res.set('Content-Type', 'application/vnd.apple.mpegurl');
+    res.send(m3u8Content);
   } catch (error) {
     console.error('Error fetching M3U8:', error.message);
-    res.status(500).send('Error proxying M3U8 playlist');
+    res.status(500).send('Error fetching playlist');
   }
 });
 
-// Proxy endpoint for .ts segments
-app.get('/superstacija/segments/:segment', async (req, res) => {
-  const segment = req.params.segment;
-  const segmentUrl = `http://145.239.19.149:9300/PL_SUPERSTACJA/${segment}`;
+// Handle requests for media segments (e.g., .ts files)
+app.get('/segments/:filename', async (req, res) => {
+  const segmentFile = req.params.filename;
+  const segmentUrl = `http://145.239.19.149:9300/PL_SUPERSTACJA/${segmentFile}`;
 
   try {
+    // Fetch the segment file
     const response = await axios.get(segmentUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      responseType: 'stream'
+      responseType: 'stream',
     });
 
-    res.set({
-      'Content-Type': 'video/mp2t',
-      'Cache-Control': 'no-cache'
-    });
+    // Set appropriate content type for TS segments
+    res.set('Content-Type', 'video/mp2t');
     response.data.pipe(res);
   } catch (error) {
     console.error('Error fetching segment:', error.message);
-    res.status(500).send('Error proxying segment');
+    res.status(404).send('Segment not found');
   }
 });
 
+// Start the server
 app.listen(PORT, () => {
-  console.log(`Proxy server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
