@@ -19,12 +19,10 @@ app.use((req, res, next) => {
 
 // Helper function to rewrite URLs in M3U8 content
 function rewriteM3u8Urls(content, baseUrl, host, protocol) {
-  // Handle relative and absolute URLs in URI attributes and stream URLs
   return content.replace(
-    /(URI="|(?<=#EXT-X-STREAM-INF:.*))((?:[a-zA-Z0-9_-]+\/)?[a-zA-Z0-9_-]+\.(?:m3u8|ts))|((?:http:\/\/145\.239\.19\.149:9300\/PL_SUPERSTACJA\/)?(?:[a-zA-Z0-9_-]+\/)?[a-zA-Z0-9_-]+\.(?:m3u8|ts))/g,
+    /(URI="|(?<=#EXT-X-STREAM-INF:.*))((?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:m3u8|ts))|((?:http:\/\/145\.239\.19\.149:9300\/PL_SUPERSTACJA\/)?(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:m3u8|ts))/g,
     (match, uriPrefix, relativePath, absolutePath) => {
       const path = relativePath || absolutePath;
-      // Determine if it's an M3U8 or TS file
       const isM3u8 = path.endsWith('.m3u8');
       const proxyPath = isM3u8 ? `playlists/${path}` : `segments/${path}`;
       return uriPrefix ? `URI="${protocol}://${host}/${proxyPath}"` : `${protocol}://${host}/${proxyPath}`;
@@ -53,10 +51,10 @@ app.get('/index.m3u8', async (req, res) => {
   }
 });
 
-// Handle requests for variant playlists (e.g., mono.m3u8)
-app.get('/playlists/:filename', async (req, res) => {
-  const filename = req.params.filename;
-  const playlistUrl = `${ORIGINAL_BASE_URL}${filename}`;
+// Handle requests for variant playlists (e.g., tracks-v1a1/mono.m3u8)
+app.get('/playlists/*', async (req, res) => {
+  const path = req.params[0]; // Captures the full path (e.g., tracks-v1a1/mono.m3u8)
+  const playlistUrl = `${ORIGINAL_BASE_URL}${path}`;
 
   try {
     const response = await axios.get(playlistUrl, {
@@ -72,15 +70,15 @@ app.get('/playlists/:filename', async (req, res) => {
     res.set('Content-Type', 'application/vnd.apple.mpegurl');
     res.send(modifiedContent);
   } catch (error) {
-    console.error(`Error fetching playlist ${filename}:`, error.message);
+    console.error(`Error fetching playlist ${path}:`, error.message);
     res.status(500).send('Error fetching variant playlist');
   }
 });
 
 // Handle requests for media segments (e.g., .ts files)
-app.get('/segments/:filename', async (req, res) => {
-  const filename = req.params.filename;
-  const segmentUrl = `${ORIGINAL_BASE_URL}${filename}`;
+app.get('/segments/*', async (req, res) => {
+  const path = req.params[0]; // Captures the full path (e.g., tracks-v1a1/segment1.ts)
+  const segmentUrl = `${ORIGINAL_BASE_URL}${path}`;
 
   try {
     const response = await axios.get(segmentUrl, {
@@ -90,7 +88,7 @@ app.get('/segments/:filename', async (req, res) => {
     res.set('Content-Type', 'video/mp2t');
     response.data.pipe(res);
   } catch (error) {
-    console.error(`Error fetching segment ${filename}:`, error.message);
+    console.error(`Error fetching segment ${path}:`, error.message);
     res.status(404).send('Segment not found');
   }
 });
