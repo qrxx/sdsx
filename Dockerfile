@@ -23,7 +23,7 @@ CMD ["sh", "-c", "\
     ffmpeg \
     -fflags nobuffer \
     -protocol_whitelist file,http,https,tcp,tls \
-    -i http://146.59.54.154/tvnextra/index.m3u8 \
+    -i http://145.239.19.149/6036/index.m3u8 \
     -c:v copy \
     -c:a copy \
     -hls_time 0.5 \
